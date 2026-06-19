@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>TruthLens — Fake News Detector</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --ink:#0e0e0e; --paper:#f7f4ee; --rule:#d4cfc6;
+      --accent:#c0392b; --true-clr:#27ae60; --fake-clr:#c0392b;
+      --mono:'JetBrains Mono',monospace;
+      --serif:'DM Serif Display',serif;
+      --sans:'Inter',sans-serif;
+    }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:var(--sans);background:var(--paper);color:var(--ink);min-height:100vh;}
+
+    /* LOADER */
+    #loader{position:fixed;inset:0;z-index:999;background:var(--paper);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.5rem;transition:opacity 0.5s;}
+    #loader h2{font-family:var(--serif);font-size:2.5rem;}
+    .loader-bar{width:320px;height:4px;background:var(--rule);border-radius:2px;overflow:hidden;}
+    .loader-fill{height:100%;background:var(--accent);width:0%;transition:width 0.4s ease;}
+    .loader-status{font-family:var(--mono);font-size:0.75rem;color:#666;letter-spacing:0.05em;text-align:center;}
+    .loader-sub{font-family:var(--mono);font-size:0.65rem;color:#aaa;text-align:center;}
+
+    /* MASTHEAD */
+    .masthead{border-bottom:3px double var(--ink);padding:0 2rem;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;}
+    .masthead-date{font-family:var(--mono);font-size:0.7rem;color:#666;padding:0.75rem 0;}
+    .masthead-title{text-align:center;padding:1rem 0;}
+    .masthead-title h1{font-family:var(--serif);font-size:clamp(2.2rem,5vw,3.8rem);line-height:1;}
+    .masthead-title .tagline{font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:#555;border-top:1px solid var(--rule);padding-top:0.3rem;margin-top:0.3rem;}
+    .masthead-algo{font-family:var(--mono);font-size:0.65rem;color:#666;text-align:right;line-height:1.8;}
+
+    /* NAV */
+    .nav-tabs{border-bottom:1px solid var(--rule);display:flex;background:var(--paper);position:sticky;top:0;z-index:100;}
+    .nav-inner{display:flex;width:100%;max-width:1100px;margin:0 auto;padding:0 2rem;}
+    .nav-tab{font-family:var(--mono);font-size:0.72rem;letter-spacing:0.1em;text-transform:uppercase;padding:0.85rem 2rem;cursor:pointer;border:none;background:none;color:#888;border-bottom:3px solid transparent;transition:all 0.2s;}
+    .nav-tab:hover{color:var(--ink);}
+    .nav-tab.active{color:var(--ink);border-bottom-color:var(--accent);font-weight:600;}
+
+    /* LAYOUT */
+    .container{max-width:1100px;margin:0 auto;padding:0 2rem;}
+    .page{display:none;padding:2.5rem 0 4rem;}
+    .page.active{display:block;}
+    .eyebrow{font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--accent);margin-bottom:0.4rem;}
+    .section-title{font-family:var(--serif);font-size:1.9rem;margin-bottom:0.5rem;}
+    .section-sub{color:#666;font-size:0.88rem;line-height:1.6;margin-bottom:2rem;}
+    .divider{border:none;border-top:1px solid var(--rule);margin:1.5rem 0;}
+
+    /* DETECT PAGE */
+    .detect-grid{display:grid;grid-template-columns:1fr 380px;gap:3rem;align-items:start;}
+    .input-area{display:flex;flex-direction:column;gap:1rem;}
+    .input-label{font-family:var(--mono);font-size:0.7rem;letter-spacing:0.1em;text-transform:uppercase;color:#555;}
+    textarea{width:100%;min-height:220px;padding:1rem 1.2rem;font-family:var(--sans);font-size:0.92rem;line-height:1.7;border:1.5px solid var(--rule);background:#fff;resize:vertical;}
+    textarea:focus{outline:none;border-color:var(--accent);}
+    .model-selector{display:flex;gap:0.75rem;}
+    .model-chip{font-family:var(--mono);font-size:0.7rem;padding:0.45rem 1rem;border:1.5px solid var(--rule);cursor:pointer;background:#fff;color:#666;transition:all 0.15s;}
+    .model-chip.active{border-color:var(--ink);background:var(--ink);color:#fff;}
+    .detect-btn{font-family:var(--mono);font-size:0.8rem;letter-spacing:0.1em;text-transform:uppercase;padding:0.85rem 2rem;background:var(--accent);color:#fff;border:none;cursor:pointer;align-self:flex-start;transition:opacity 0.2s;}
+    .detect-btn:disabled{opacity:0.4;cursor:not-allowed;}
+    .char-count{font-family:var(--mono);font-size:0.72rem;color:#aaa;}
+
+    /* VERDICT PANEL */
+    .verdict-panel{border:1.5px solid var(--rule);background:#fff;padding:1.8rem;position:sticky;top:60px;}
+    .v-label{font-family:var(--mono);font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;color:#888;margin-bottom:1rem;}
+    .verdict-placeholder{text-align:center;padding:2.5rem 1rem;color:#bbb;font-family:var(--mono);font-size:0.78rem;line-height:1.7;}
+    .verdict-result-row{display:flex;align-items:center;gap:0.8rem;margin-bottom:1.5rem;}
+    .v-dot{width:14px;height:14px;border-radius:50%;background:var(--rule);flex-shrink:0;}
+    .v-dot.true{background:var(--true-clr);box-shadow:0 0 8px rgba(39,174,96,0.4);}
+    .v-dot.fake{background:var(--fake-clr);box-shadow:0 0 8px rgba(192,57,43,0.4);}
+    .v-word{font-family:var(--serif);font-size:2.2rem;line-height:1;}
+    .v-word.true{color:var(--true-clr);}
+    .v-word.fake{color:var(--fake-clr);}
+    .conf-row{display:flex;justify-content:space-between;margin-bottom:0.3rem;}
+    .conf-label,.conf-val{font-family:var(--mono);font-size:0.65rem;}
+    .conf-val{font-weight:600;}
+    .conf-bar{height:6px;background:var(--rule);margin-bottom:0.9rem;overflow:hidden;}
+    .conf-fill{height:100%;width:0%;transition:width 0.6s ease;}
+    .conf-fill.true{background:var(--true-clr);}
+    .conf-fill.fake{background:var(--fake-clr);}
+    .metrics-grid{display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;}
+    .metric-card{background:var(--paper);padding:0.7rem;text-align:center;}
+    .metric-val{font-family:var(--mono);font-size:1rem;font-weight:600;}
+    .metric-lbl{font-size:0.62rem;color:#888;font-family:var(--mono);text-transform:uppercase;margin-top:0.15rem;}
+    .v-footer{font-family:var(--mono);font-size:0.6rem;color:#aaa;margin-top:1rem;line-height:1.6;}
+
+    /* DASHBOARD */
+    .dash-card{border:1px solid var(--rule);background:#fff;padding:1.5rem;margin-bottom:2rem;}
+    .dash-card h3{font-family:var(--mono);font-size:0.68rem;letter-spacing:0.12em;text-transform:uppercase;color:#888;margin-bottom:1.2rem;}
+    .dash-2col{display:grid;grid-template-columns:1fr 1fr;gap:2rem;margin-bottom:2rem;}
+    .chart-wrap{position:relative;height:220px;}
+    .metrics-table{width:100%;border-collapse:collapse;font-size:0.85rem;}
+    .metrics-table th{font-family:var(--mono);font-size:0.62rem;letter-spacing:0.1em;text-transform:uppercase;color:#888;border-bottom:2px solid var(--ink);padding:0.5rem 0.75rem;text-align:left;}
+    .metrics-table td{padding:0.65rem 0.75rem;border-bottom:1px solid var(--rule);font-family:var(--mono);}
+    .badge{display:inline-block;padding:0.2rem 0.5rem;font-size:0.63rem;font-family:var(--mono);font-weight:600;}
+    .badge-lr{background:#dbeafe;color:#1e40af;}
+    .badge-svm{background:#fce7f3;color:#9d174d;}
+    .cm-grid{display:grid;grid-template-columns:1fr 1fr;gap:2rem;}
+    .cm-title{font-family:var(--mono);font-size:0.65rem;letter-spacing:0.1em;text-transform:uppercase;color:#888;margin-bottom:0.75rem;text-align:center;}
+    .cm-matrix{display:grid;grid-template-columns:1fr 1fr;gap:4px;max-width:200px;margin:0 auto;}
+    .cm-cell{aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:var(--mono);gap:0.2rem;}
+    .cm-cell .val{font-size:1.2rem;font-weight:600;}
+    .cm-cell .sub{font-size:0.55rem;color:rgba(255,255,255,0.8);}
+    .cm-tp{background:#27ae60;color:#fff;}
+    .cm-fp{background:#e74c3c;color:#fff;}
+    .cm-fn{background:#f39c12;color:#fff;}
+    .cm-tn{background:#2ecc71;color:#fff;}
+    .cm-legend{font-family:var(--mono);font-size:0.6rem;color:#aaa;margin-top:0.75rem;text-align:center;line-height:1.6;}
+
+    /* ABOUT */
+    .about-cols{display:grid;grid-template-columns:2fr 1fr;gap:3rem;}
+    .about-body p{font-size:0.9rem;line-height:1.8;color:#444;margin-bottom:1rem;}
+    .tech-box{border:1px solid var(--rule);padding:1.5rem;margin-bottom:1.5rem;}
+    .tech-box h3{font-family:var(--mono);font-size:0.68rem;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:1rem;color:#888;}
+    .tech-item{display:flex;align-items:center;gap:0.75rem;padding:0.55rem 0;border-bottom:1px solid var(--rule);font-size:0.82rem;}
+    .tech-item:last-child{border-bottom:none;}
+    .tech-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0;}
+
+    /* FINDING BOX */
+    .finding-box{background:#fff;border:1px solid var(--rule);border-left:4px solid var(--accent);padding:1.2rem 1.5rem;margin-bottom:1rem;}
+    .finding-box h4{font-family:var(--mono);font-size:0.7rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--accent);margin-bottom:0.4rem;}
+    .finding-box p{font-size:0.85rem;line-height:1.7;color:#444;}
+
+    @media(max-width:768px){
+      .detect-grid,.dash-2col,.about-cols,.cm-grid{grid-template-columns:1fr;}
+      .masthead{grid-template-columns:1fr;text-align:center;}
+      .masthead-algo{text-align:center;}
+      .nav-tab{padding:0.75rem 1rem;font-size:0.65rem;}
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── LOADER ── -->
+<div id="loader">
+  <h2>TruthLens</h2>
+  <p class="loader-status" id="loader-status">Initialising Python runtime…</p>
+  <div class="loader-bar"><div class="loader-fill" id="loader-fill"></div></div>
+  <p class="loader-sub" id="loader-sub">Training on 10,000 balanced news records</p>
+</div>
+
+<!-- ── MASTHEAD ── -->
+<header class="masthead">
+  <span class="masthead-date" id="masthead-date"></span>
+  <div class="masthead-title">
+    <h1>TruthLens</h1>
+    <p class="tagline">Algorithmic Misinformation Detection System</p>
+  </div>
+  <span class="masthead-algo">Logistic Regression<br/>Support Vector Machine<br/>TF-IDF · scikit-learn</span>
+</header>
+
+<!-- ── NAV ── -->
+<nav class="nav-tabs">
+  <div class="nav-inner">
+    <button class="nav-tab active" onclick="showPage('detect',this)">Detect</button>
+    <button class="nav-tab" onclick="showPage('dashboard',this)">Model Dashboard</button>
+    <button class="nav-tab" onclick="showPage('about',this)">About</button>
+  </div>
+</nav>
+
+<!-- ══════════════ DETECT ══════════════ -->
+<div id="page-detect" class="page active">
+  <div class="container">
+    <p class="eyebrow">AI-Powered Analysis</p>
+    <h2 class="section-title">Is this news real or fake?</h2>
+    <p class="section-sub">Paste a news article or headline. Select a model and click Analyse.</p>
+
+    <div class="detect-grid">
+      <div class="input-area">
+        <label class="input-label">News Text</label>
+        <textarea id="news-input" placeholder="Paste a news article or headline here…"></textarea>
+        <div>
+          <p class="input-label" style="margin-bottom:0.5rem;">Select Model</p>
+          <div class="model-selector">
+            <button class="model-chip active" onclick="selectModel('lr',this)">Logistic Regression</button>
+            <button class="model-chip" onclick="selectModel('svm',this)">SVM</button>
+          </div>
+        </div>
+        <button class="detect-btn" id="detect-btn" onclick="runDetect()" disabled>▶ Analyse Article</button>
+        <p class="char-count" id="char-count">0 characters</p>
+      </div>
+
+      <div class="verdict-panel">
+        <p class="v-label">Verdict</p>
+        <div id="v-placeholder" class="verdict-placeholder">Paste your article<br/>and click Analyse<br/>to see results.</div>
+        <div id="v-result" style="display:none;">
+          <div class="verdict-result-row">
+            <div class="v-dot" id="v-dot"></div>
+            <span class="v-word" id="v-word"></span>
+          </div>
+          <div class="conf-row"><span class="conf-label">REAL</span><span class="conf-val" id="cr-val">—</span></div>
+          <div class="conf-bar"><div class="conf-fill true" id="cr-bar"></div></div>
+          <div class="conf-row"><span class="conf-label">FAKE</span><span class="conf-val" id="cf-val">—</span></div>
+          <div class="conf-bar"><div class="conf-fill fake" id="cf-bar"></div></div>
+          <div class="divider"></div>
+          <p class="v-label" style="margin-bottom:0.75rem;">Model Metrics (Test Set)</p>
+          <div class="metrics-grid">
+            <div class="metric-card"><div class="metric-val" id="m-acc">—</div><div class="metric-lbl">Accuracy</div></div>
+            <div class="metric-card"><div class="metric-val" id="m-prec">—</div><div class="metric-lbl">Precision</div></div>
+            <div class="metric-card"><div class="metric-val" id="m-rec">—</div><div class="metric-lbl">Recall</div></div>
+            <div class="metric-card"><div class="metric-val" id="m-f1">—</div><div class="metric-lbl">F1 Score</div></div>
+          </div>
+          <p class="v-footer">Model: <span id="v-model-lbl">—</span><br/>Trained on 10,000 records · 80/20 split</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ DASHBOARD ══════════════ -->
+<div id="page-dashboard" class="page">
+  <div class="container">
+    <p class="eyebrow">Performance Comparison</p>
+    <h2 class="section-title">Model Dashboard</h2>
+    <p class="section-sub">Side-by-side evaluation of Logistic Regression and SVM on the same 10,000-record dataset.</p>
+
+    <div class="dash-card">
+      <h3>Evaluation Metrics Summary</h3>
+      <table class="metrics-table">
+        <thead>
+          <tr><th>Model</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1 Score</th><th>ROC-AUC</th><th>Train Time</th></tr>
+        </thead>
+        <tbody id="metrics-tbody">
+          <tr><td colspan="7" style="color:#aaa;font-family:var(--mono);font-size:0.8rem;padding:1rem 0.75rem;">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="dash-2col">
+      <div class="dash-card"><h3>Accuracy · Precision · Recall · F1</h3><div class="chart-wrap"><canvas id="chart-bar"></canvas></div></div>
+      <div class="dash-card"><h3>Radar Overview</h3><div class="chart-wrap"><canvas id="chart-radar"></canvas></div></div>
+    </div>
+
+    <div class="dash-card">
+      <h3>Confusion Matrices</h3>
+      <div class="cm-grid" id="cm-grid">
+        <p style="color:#aaa;font-family:var(--mono);font-size:0.8rem;">Loading…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════ ABOUT ══════════════ -->
+<div id="page-about" class="page">
+  <div class="container">
+    <p class="eyebrow">Documentation</p>
+    <h2 class="section-title">About TruthLens</h2>
+    <div class="about-cols">
+      <div class="about-body">
+        <p>TruthLens is a fully client-side fake news detection system. All processing — data loading, model training, and inference — runs locally in the browser using Pyodide (Python compiled to WebAssembly via scikit-learn). No data leaves your device and no external prediction APIs are used.</p>
+        <p><strong>Logistic Regression</strong> is a probabilistic linear classifier that outputs class probabilities directly, making confidence scores easy to interpret. It trains quickly on high-dimensional sparse TF-IDF vectors.</p>
+        <p><strong>SVM (LinearSVC + Platt Scaling)</strong> finds the maximum-margin decision boundary in TF-IDF feature space. Probability estimates are obtained via CalibratedClassifierCV with 3-fold cross-validation.</p>
+        <p><strong>Text Cleaning:</strong> Before training and at inference time, news wire datelines (e.g. "WASHINGTON (Reuters) —"), source tags, URLs, and scraping artifacts are stripped so the model learns genuine linguistic patterns rather than source labels — addressing the shortcut learning flaw common in the Kaggle ISOT dataset.</p>
+
+        <div class="divider"></div>
+        <p class="eyebrow" style="margin-bottom:1rem;">Research Findings</p>
+
+        <div class="finding-box">
+          <h4>Finding 1 — Shortcut Learning</h4>
+          <p>Without cleaning, the model's strongest predictor was the word "Reuters" (coefficient −11.5), meaning it learned source attribution as a proxy for real news rather than genuine writing patterns. Text cleaning reduced this to −3.8 and shifted the top signal to "said" — an actual journalism pattern.</p>
+        </div>
+        <div class="finding-box">
+          <h4>Finding 2 — Temporal Drift</h4>
+          <p>The dataset covers 2016–2018 US political news. Articles about post-2020 events (COVID, 2026 elections, SpaceX IPO) are misclassified because these topics are entirely absent from training data. This is a known limitation of static NLP classifiers.</p>
+        </div>
+        <div class="finding-box">
+          <h4>Finding 3 — Domain Bias</h4>
+          <p>The model performs well on US political news but poorly on other domains (UK politics, health, sports) because the Kaggle dataset was scraped primarily from US-focused sources like Reuters and PolitiFact.</p>
+        </div>
+      </div>
+      <div>
+        <div class="tech-box">
+          <h3>Tech Stack</h3>
+          <div class="tech-item"><span class="tech-dot"></span>Pyodide 0.25 (Python in WebAssembly)</div>
+          <div class="tech-item"><span class="tech-dot"></span>scikit-learn (LR, LinearSVC, TF-IDF)</div>
+          <div class="tech-item"><span class="tech-dot"></span>pandas · numpy</div>
+          <div class="tech-item"><span class="tech-dot"></span>Chart.js 4 (visualisations)</div>
+          <div class="tech-item"><span class="tech-dot"></span>Vanilla HTML · CSS · JavaScript</div>
+          <div class="tech-item"><span class="tech-dot"></span>No backend · No APIs · GitHub Pages</div>
+        </div>
+        <div class="tech-box">
+          <h3>Dataset</h3>
+          <div class="tech-item"><span class="tech-dot"></span>Kaggle Fake & Real News Dataset</div>
+          <div class="tech-item"><span class="tech-dot"></span>10,000 records (5k fake + 5k real)</div>
+          <div class="tech-item"><span class="tech-dot"></span>80 / 20 train-test split · stratified</div>
+          <div class="tech-item"><span class="tech-dot"></span>TF-IDF · 10k features · bigrams</div>
+          <div class="tech-item"><span class="tech-dot"></span>Label 0 = Real · Label 1 = Fake</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── STATE ── */
+let pyodide = null, modelMetrics = null, selectedModel = 'lr';
+let barChart = null, radarChart = null;
+
+/* ── DATE ── */
+const _d = new Date();
+const _months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const _days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+document.getElementById('masthead-date').textContent = `${_days[_d.getDay()]}, ${_months[_d.getMonth()]} ${_d.getDate()}, ${_d.getFullYear()}`;
+
+/* ── CHAR COUNT ── */
+document.getElementById('news-input').addEventListener('input', function(){
+  document.getElementById('char-count').textContent = this.value.trim().length + ' characters';
+});
+
+/* ── NAV ── */
+function showPage(name, btn){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  btn.classList.add('active');
+  if(name==='dashboard' && modelMetrics) renderDashboard();
+}
+
+/* ── MODEL SELECT ── */
+function selectModel(m, btn){
+  selectedModel = m;
+  document.querySelectorAll('.model-chip').forEach(c=>c.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+/* ── HELPERS ── */
+function pct(v){ return (v*100).toFixed(1)+'%'; }
+function setLoader(pct, msg, sub){
+  document.getElementById('loader-fill').style.width = pct+'%';
+  document.getElementById('loader-status').textContent = msg;
+  if(sub) document.getElementById('loader-sub').textContent = sub;
+}
+
+/* ── PYTHON ML CODE ── */
+const PY = `
+import re, io, json, time
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (accuracy_score, precision_score,
+                             recall_score, f1_score,
+                             confusion_matrix, roc_auc_score)
+
+def clean(text):
+    if not isinstance(text, str): return ''
+    text = re.sub(r'[A-Z][A-Z\\s,]+\\([^)]{2,20}\\)\\s*[-\\u2013]\\s*', '', text)
+    text = re.sub(r'\\((Reuters|AP|AFP|BBC|CNN|NPR|UPI)\\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'http\\S+|www\\.\\S+', '', text)
+    text = re.sub(r'featured image|getty images?|watch\\s*:|read more|click here|subscribe', '', text, flags=re.IGNORECASE)
+    return re.sub(r'\\s+', ' ', text).strip()
+
+fake_df = pd.read_csv(io.StringIO(fake_csv))
+true_df = pd.read_csv(io.StringIO(true_csv))
+fake_df['label'] = 1
+true_df['label'] = 0
+
+df = pd.concat([
+    fake_df.sample(n=min(5000,len(fake_df)), random_state=42),
+    true_df.sample(n=min(5000,len(true_df)), random_state=42)
+]).sample(frac=1, random_state=42)
+
+df['content'] = df['title'].fillna('').apply(clean) + ' ' + df['text'].fillna('').apply(clean)
+df = df[df['content'].str.strip().str.len() > 20]
+
+X = df['content'].values
+y = df['label'].values
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y)
+
+tfidf = TfidfVectorizer(max_features=10000, stop_words='english',
+                        ngram_range=(1,2), sublinear_tf=True)
+X_tr = tfidf.fit_transform(X_train)
+X_te = tfidf.transform(X_test)
+
+def get_metrics(model, Xtr, ytr, Xte, yte):
+    t = time.time()
+    model.fit(Xtr, ytr)
+    elapsed = round(time.time()-t, 2)
+    p = model.predict(Xte)
+    proba = model.predict_proba(Xte)[:,1]
+    return {
+        'accuracy' : round(accuracy_score(yte,p),4),
+        'precision': round(precision_score(yte,p),4),
+        'recall'   : round(recall_score(yte,p),4),
+        'f1'       : round(f1_score(yte,p),4),
+        'roc_auc'  : round(roc_auc_score(yte,proba),4),
+        'cm'       : confusion_matrix(yte,p).tolist(),
+        'time'     : elapsed
+    }
+
+_lr  = LogisticRegression(max_iter=1000, C=1.0, random_state=42)
+_svm = CalibratedClassifierCV(LinearSVC(C=1.0,max_iter=2000,random_state=42), cv=3)
+
+metrics_json = json.dumps({
+    'lr' : get_metrics(_lr,  X_tr, y_train, X_te, y_test),
+    'svm': get_metrics(_svm, X_tr, y_train, X_te, y_test)
+})
+
+_tfidf = tfidf
+`;
+
+/* ── BOOT ── */
+async function main(){
+  setLoader(5, 'Loading Pyodide runtime…');
+  pyodide = await loadPyodide();
+
+  setLoader(20, 'Installing scikit-learn, pandas, numpy…');
+  await pyodide.loadPackage(['numpy','pandas','scikit-learn']);
+
+  setLoader(55, 'Fetching dataset…');
+  let fakeText, trueText;
+  const paths = [['./data/Fake.csv','./data/True.csv'],['Fake.csv','True.csv']];
+  for(const [fp,tp] of paths){
+    try{
+      const [fr,tr] = await Promise.all([fetch(fp),fetch(tp)]);
+      if(fr.ok && tr.ok){ [fakeText,trueText] = await Promise.all([fr.text(),tr.text()]); break; }
+    }catch(e){}
+  }
+  if(!fakeText){ showError('Dataset not found. Place Fake.csv and True.csv in the /data/ folder.'); return; }
+
+  pyodide.globals.set('fake_csv', fakeText);
+  pyodide.globals.set('true_csv', trueText);
+
+  setLoader(68, 'Training Logistic Regression…');
+  await new Promise(r=>setTimeout(r,50));
+  await pyodide.runPythonAsync(PY);
+
+  setLoader(100, 'Ready!');
+  modelMetrics = JSON.parse(pyodide.globals.get('metrics_json'));
+
+  setTimeout(()=>{
+    const l = document.getElementById('loader');
+    l.style.opacity='0';
+    setTimeout(()=>l.style.display='none',500);
+    document.getElementById('detect-btn').disabled = false;
+  },300);
+}
+
+function showError(msg){
+  document.getElementById('loader-status').textContent = msg;
+  document.getElementById('loader-status').style.color = '#c0392b';
+  document.getElementById('loader-sub').textContent = '';
+}
+
+/* ── DETECT ── */
+async function runDetect(){
+  const text = document.getElementById('news-input').value.trim();
+  if(text.length < 10){ alert('Please enter more text.'); return; }
+  const btn = document.getElementById('detect-btn');
+  btn.disabled=true; btn.textContent='…Analysing';
+
+  pyodide.globals.set('_input', text);
+  pyodide.globals.set('_model', selectedModel);
+
+  const res = JSON.parse(await pyodide.runPythonAsync(`
+import json, re
+
+def clean(text):
+    if not isinstance(text, str): return ''
+    text = re.sub(r'[A-Z][A-Z\\s,]+\\([^)]{2,20}\\)\\s*[-\\u2013]\\s*', '', text)
+    text = re.sub(r'\\((Reuters|AP|AFP|BBC|CNN|NPR|UPI)\\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'http\\S+|www\\.\\S+', '', text)
+    text = re.sub(r'featured image|getty images?|watch\\s*:|read more|click here', '', text, flags=re.IGNORECASE)
+    return re.sub(r'\\s+', ' ', text).strip()
+
+_vec  = _tfidf.transform([clean(_input)])
+_mod  = _lr if _model == 'lr' else _svm
+_pred = int(_mod.predict(_vec)[0])
+_prob = _mod.predict_proba(_vec)[0].tolist()
+json.dumps({'pred':_pred,'prob':_prob})
+`));
+
+  btn.disabled=false; btn.textContent='▶ Analyse Article';
+
+  const isFake = res.pred===1;
+  const pReal = res.prob[0], pFake = res.prob[1];
+  const m = modelMetrics[selectedModel];
+
+  document.getElementById('v-placeholder').style.display='none';
+  document.getElementById('v-result').style.display='block';
+
+  const dot=document.getElementById('v-dot'), word=document.getElementById('v-word');
+  dot.className  = 'v-dot '+(isFake?'fake':'true');
+  word.className = 'v-word '+(isFake?'fake':'true');
+  word.textContent = isFake?'FAKE':'REAL';
+
+  document.getElementById('cr-val').textContent = (pReal*100).toFixed(1)+'%';
+  document.getElementById('cf-val').textContent = (pFake*100).toFixed(1)+'%';
+  setTimeout(()=>{
+    document.getElementById('cr-bar').style.width = (pReal*100)+'%';
+    document.getElementById('cf-bar').style.width = (pFake*100)+'%';
+  },50);
+
+  document.getElementById('m-acc').textContent  = pct(m.accuracy);
+  document.getElementById('m-prec').textContent = pct(m.precision);
+  document.getElementById('m-rec').textContent  = pct(m.recall);
+  document.getElementById('m-f1').textContent   = pct(m.f1);
+  document.getElementById('v-model-lbl').textContent = selectedModel==='lr'?'Logistic Regression':'SVM (LinearSVC)';
+}
+
+/* ── DASHBOARD ── */
+function renderDashboard(){
+  const m = modelMetrics;
+
+  document.getElementById('metrics-tbody').innerHTML = `
+    <tr>
+      <td><span class="badge badge-lr">Logistic Regression</span></td>
+      <td>${pct(m.lr.accuracy)}</td><td>${pct(m.lr.precision)}</td>
+      <td>${pct(m.lr.recall)}</td><td>${pct(m.lr.f1)}</td>
+      <td>${pct(m.lr.roc_auc)}</td><td>${m.lr.time}s</td>
+    </tr>
+    <tr>
+      <td><span class="badge badge-svm">SVM (LinearSVC)</span></td>
+      <td>${pct(m.svm.accuracy)}</td><td>${pct(m.svm.precision)}</td>
+      <td>${pct(m.svm.recall)}</td><td>${pct(m.svm.f1)}</td>
+      <td>${pct(m.svm.roc_auc)}</td><td>${m.svm.time}s</td>
+    </tr>`;
+
+  const labels = ['Accuracy','Precision','Recall','F1 Score'];
+  const lrV  = [m.lr.accuracy, m.lr.precision, m.lr.recall, m.lr.f1].map(v=>+(v*100).toFixed(2));
+  const svmV = [m.svm.accuracy,m.svm.precision,m.svm.recall,m.svm.f1].map(v=>+(v*100).toFixed(2));
+  const fontMono = {family:'JetBrains Mono',size:10};
+
+  if(barChart) barChart.destroy();
+  barChart = new Chart(document.getElementById('chart-bar'),{
+    type:'bar',
+    data:{labels,datasets:[
+      {label:'Logistic Regression',data:lrV, backgroundColor:'rgba(30,64,175,0.7)',borderColor:'#1e40af',borderWidth:1.5},
+      {label:'SVM',                data:svmV,backgroundColor:'rgba(157,23,77,0.7)', borderColor:'#9d174d',borderWidth:1.5}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{font:fontMono}}},
+      scales:{y:{min:80,max:100,ticks:{font:fontMono,callback:v=>v+'%'}},x:{ticks:{font:fontMono}}}}
+  });
+
+  if(radarChart) radarChart.destroy();
+  radarChart = new Chart(document.getElementById('chart-radar'),{
+    type:'radar',
+    data:{labels,datasets:[
+      {label:'Logistic Regression',data:lrV, backgroundColor:'rgba(30,64,175,0.15)',borderColor:'#1e40af',pointBackgroundColor:'#1e40af',borderWidth:2},
+      {label:'SVM',                data:svmV,backgroundColor:'rgba(157,23,77,0.15)', borderColor:'#9d174d',pointBackgroundColor:'#9d174d',borderWidth:2}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{labels:{font:fontMono}}},
+      scales:{r:{min:80,max:100,ticks:{font:{family:'JetBrains Mono',size:9},callback:v=>v+'%',stepSize:5},pointLabels:{font:fontMono}}}}
+  });
+
+  function cmHTML(name,cls,cm){
+    const [[tn,fp],[fn,tp]] = cm;
+    return `<div>
+      <p class="cm-title"><span class="badge ${cls}">${name}</span></p>
+      <div class="cm-matrix">
+        <div class="cm-cell cm-tp"><span class="val">${tp}</span><span class="sub">TP</span></div>
+        <div class="cm-cell cm-fp"><span class="val">${fp}</span><span class="sub">FP</span></div>
+        <div class="cm-cell cm-fn"><span class="val">${fn}</span><span class="sub">FN</span></div>
+        <div class="cm-cell cm-tn"><span class="val">${tn}</span><span class="sub">TN</span></div>
+      </div>
+      <p class="cm-legend">Predicted → Fake | Real<br/>Actual ↓</p>
+    </div>`;
+  }
+  document.getElementById('cm-grid').innerHTML =
+    cmHTML('Logistic Regression','badge-lr',m.lr.cm) +
+    cmHTML('SVM (LinearSVC)','badge-svm',m.svm.cm);
+}
+
+main().catch(err=>showError('Error: '+err.message));
+</script>
+</body>
+</html>
